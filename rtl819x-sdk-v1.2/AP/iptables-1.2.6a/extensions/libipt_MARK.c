@@ -1,38 +1,35 @@
-/* Shared library add-on to iptables to add MARK target support. */
+/* Shared library add-on to iptables to add NFMARK matching support. */
 #include <stdio.h>
+#include <netdb.h>
 #include <string.h>
 #include <stdlib.h>
 #include <getopt.h>
 
 #include <iptables.h>
-#include <linux/netfilter_ipv4/ip_tables.h>
-#include <linux/netfilter_ipv4/ipt_MARK.h>
-
-struct markinfo {
-	struct ipt_entry_target t;
-	struct ipt_mark_target_info mark;
-};
+#include <linux/netfilter_ipv4/ipt_mark.h>
 
 /* Function which prints out usage message. */
 static void
 help(void)
 {
 	printf(
-"MARK target v%s options:\n"
-"  --set-mark value                   Set nfmark value\n"
+"MARK match v%s options:\n"
+"[!] --mark value[/mask]         Match nfmark value with optional mask\n"
 "\n",
 NETFILTER_VERSION);
 }
 
 static struct option opts[] = {
-	{ "set-mark", 1, 0, '1' },
-	{ 0 }
+	{ "mark", 1, 0, '1' },
+	{0}
 };
 
-/* Initialize the target. */
+/* Initialize the match. */
 static void
-init(struct ipt_entry_target *t, unsigned int *nfcache)
+init(struct ipt_entry_match *m, unsigned int *nfcache)
 {
+	/* Can't cache this. */
+	*nfcache |= NFC_UNKNOWN;
 }
 
 /* Function which parses command options; returns true if it
@@ -40,73 +37,83 @@ init(struct ipt_entry_target *t, unsigned int *nfcache)
 static int
 parse(int c, char **argv, int invert, unsigned int *flags,
       const struct ipt_entry *entry,
-      struct ipt_entry_target **target)
+      unsigned int *nfcache,
+      struct ipt_entry_match **match)
 {
-	struct ipt_mark_target_info *markinfo
-		= (struct ipt_mark_target_info *)(*target)->data;
+	struct ipt_mark_info *markinfo = (struct ipt_mark_info *)(*match)->data;
 
 	switch (c) {
 		char *end;
 	case '1':
+		check_inverse(optarg, &invert, &optind, 0);
 		markinfo->mark = strtoul(optarg, &end, 0);
+		if (*end == '/') {
+			markinfo->mask = strtoul(end+1, &end, 0);
+		} else
+			markinfo->mask = 0xffffffff;
 		if (*end != '\0' || end == optarg)
 			exit_error(PARAMETER_PROBLEM, "Bad MARK value `%s'", optarg);
-		if (*flags)
-			exit_error(PARAMETER_PROBLEM,
-			           "MARK target: Can't specify --set-mark twice");
+		if (invert)
+			markinfo->invert = 1;
 		*flags = 1;
 		break;
 
 	default:
 		return 0;
 	}
-
 	return 1;
 }
 
+static void
+print_mark(unsigned long mark, unsigned long mask, int invert, int numeric)
+{
+	if (invert)
+		fputc('!', stdout);
+
+	if(mask != 0xffffffff)
+		printf("0x%lx/0x%lx ", mark, mask);
+	else
+		printf("0x%lx ", mark);
+}
+
+/* Final check; must have specified --mark. */
 static void
 final_check(unsigned int flags)
 {
 	if (!flags)
 		exit_error(PARAMETER_PROBLEM,
-		           "MARK target: Parameter --set-mark is required");
+			   "MARK match: You must specify `--mark'");
 }
 
-static void
-print_mark(unsigned long mark, int numeric)
-{
-	printf("0x%lx ", mark);
-}
-
-/* Prints out the targinfo. */
+/* Prints out the matchinfo. */
 static void
 print(const struct ipt_ip *ip,
-      const struct ipt_entry_target *target,
+      const struct ipt_entry_match *match,
       int numeric)
 {
-	const struct ipt_mark_target_info *markinfo =
-		(const struct ipt_mark_target_info *)target->data;
-	printf("MARK set ");
-	print_mark(markinfo->mark, numeric);
+	printf("MARK match ");
+	print_mark(((struct ipt_mark_info *)match->data)->mark,
+		  ((struct ipt_mark_info *)match->data)->mask,
+		  ((struct ipt_mark_info *)match->data)->invert, numeric);
 }
 
-/* Saves the union ipt_targinfo in parsable form to stdout. */
+/* Saves the union ipt_matchinfo in parsable form to stdout. */
 static void
-save(const struct ipt_ip *ip, const struct ipt_entry_target *target)
+save(const struct ipt_ip *ip, const struct ipt_entry_match *match)
 {
-	const struct ipt_mark_target_info *markinfo =
-		(const struct ipt_mark_target_info *)target->data;
-
-	printf("--set-mark 0x%lx ", markinfo->mark);
+	printf("--mark ");
+	print_mark(((struct ipt_mark_info *)match->data)->mark,
+		  ((struct ipt_mark_info *)match->data)->mask,
+		  ((struct ipt_mark_info *)match->data)->invert, 0);
 }
 
 static
-struct iptables_target mark
+struct iptables_match mark
 = { NULL,
-    "MARK",
+    "mark",
     NETFILTER_VERSION,
-    IPT_ALIGN(sizeof(struct ipt_mark_target_info)),
-    IPT_ALIGN(sizeof(struct ipt_mark_target_info)),
+    IPT_ALIGN(sizeof(struct ipt_mark_info)),
+    IPT_ALIGN(sizeof(struct ipt_mark_info)),
     &help,
     &init,
     &parse,
@@ -118,5 +125,5 @@ struct iptables_target mark
 
 void _init(void)
 {
-	register_target(&mark);
+	register_match(&mark);
 }
